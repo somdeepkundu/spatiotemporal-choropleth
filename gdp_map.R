@@ -1,6 +1,7 @@
 # ============================================================
-# GDP per Capita Animated Choropleth Map — v9
-# Equal Earth projection + boundary lines + Box-Cox
+# GDP per Capita Animated Choropleth Map — v10
+# Equal Earth projection + Natural Earth boundaries (official
+# India boundary) + Box-Cox transformation
 # ============================================================
 
 setwd(here::here())
@@ -9,7 +10,6 @@ library(here)
 library(ggplot2)
 library(gganimate)
 library(sf)
-library(maps)
 library(dplyr)
 library(gifski)
 library(gapminder)
@@ -20,36 +20,52 @@ library(MASS)
 
 eqearth_crs <- "+proj=eqearth +datum=WGS84 +units=m +no_defs"
 
-# ── 2. Data Preparation ──────────────────────────────────────────────────────
+# ── 2. Download Natural Earth shapefile (official India boundary) ─────────────
 
-world_sf <- sf::st_as_sf(maps::map("world", plot = FALSE, fill = TRUE))
+ne_url <- "https://github.com/somdeepkundu/geoKosh/raw/main/IndiaShapes/others/ne_10m_admin_0_countries_ind.zip"
+ne_zip <- file.path(tempdir(), "ne_countries.zip")
+ne_dir <- file.path(tempdir(), "ne_countries")
+
+if (!file.exists(ne_zip)) {
+  download.file(ne_url, ne_zip, mode = "wb", quiet = TRUE)
+  unzip(ne_zip, exdir = ne_dir)
+}
+
+shp_file <- list.files(ne_dir, pattern = "\\.shp$",
+                        full.names = TRUE, recursive = TRUE)[1]
+world_sf <- sf::st_read(shp_file, quiet = TRUE)
+
+# ── 3. Data Preparation ──────────────────────────────────────────────────────
+
+# Natural Earth uses ADMIN for full country names
+name_col <- if ("ADMIN" %in% names(world_sf)) "ADMIN" else "NAME"
 
 gapminder_clean <- gapminder %>%
   mutate(country = as.character(country)) %>%
   mutate(country = recode(country,
-    "United States"           = "USA",
-    "United Kingdom"          = "UK",
+    "United States"           = "United States of America",
     "Korea, Rep."             = "South Korea",
     "Korea, Dem. Rep."        = "North Korea",
     "Congo, Dem. Rep."        = "Democratic Republic of the Congo",
-    "Congo, Rep."             = "Republic of Congo",
-    "Trinidad and Tobago"     = "Trinidad",
+    "Congo, Rep."             = "Republic of the Congo",
     "Yemen, Rep."             = "Yemen",
     "Cote d'Ivoire"           = "Ivory Coast",
     "Slovak Republic"         = "Slovakia",
-    "West Bank and Gaza"      = "Palestine"
+    "West Bank and Gaza"      = "Palestine",
+    "Czech Republic"          = "Czechia",
+    "Swaziland"               = "eSwatini"
   ))
 
-# Join + pre-transform to Equal Earth (so gganimate can't drop the projection)
+# Join + pre-transform to Equal Earth
 world_gdp_sf <- world_sf %>%
   left_join(
     gapminder_clean %>% dplyr::select(country, year, gdpPercap),
-    by           = c("ID" = "country"),
+    by           = setNames("country", name_col),
     relationship = "many-to-many"
   ) %>%
   sf::st_transform(eqearth_crs)
 
-# ── 3. Box-Cox Transformation ────────────────────────────────────────────────
+# ── 4. Box-Cox Transformation ────────────────────────────────────────────────
 
 gdp_vals <- gapminder_clean$gdpPercap[
   !is.na(gapminder_clean$gdpPercap) & gapminder_clean$gdpPercap > 0
@@ -67,7 +83,7 @@ bc_trans <- scales::trans_new(
   domain    = c(1e-6, Inf)
 )
 
-# ── 4. Globe + Graticule (pre-transformed to Equal Earth) ────────────────────
+# ── 5. Globe + Graticule (pre-transformed to Equal Earth) ────────────────────
 
 globe_ee <- sf::st_as_sfc(
   "POLYGON((-179.9 -89.9, 179.9 -89.9, 179.9 89.9, -179.9 89.9, -179.9 -89.9))",
@@ -80,7 +96,7 @@ grat_ee <- sf::st_graticule(
   ndiscr = 100
 ) %>% sf::st_transform(eqearth_crs)
 
-# ── 5. Year Progress Bar (Equal Earth meters) ────────────────────────────────
+# ── 6. Year Progress Bar (Equal Earth meters) ────────────────────────────────
 
 years_seq <- sort(unique(gapminder_clean$year))
 year_min  <- min(years_seq)
@@ -96,7 +112,7 @@ marker_df <- data.frame(
     (years_seq - year_min) / (year_max - year_min) * (bar_xmax_m - bar_xmin_m)
 )
 
-# ── 6. Build Plot ─────────────────────────────────────────────────────────────
+# ── 7. Build Plot ─────────────────────────────────────────────────────────────
 
 p <- ggplot() +
 
@@ -159,13 +175,13 @@ p <- ggplot() +
     title    = "Global GDP per Capita",
     subtitle = "Year: {closest_state}",
     caption  = sprintf(
-      "Source: Gapminder  |  Grey = no data  |  Box-Cox \u03bb = %.2f", lambda
+      "Source: Gapminder | Boundary: Natural Earth | Box-Cox \u03bb = %.2f", lambda
     )
   ) +
   transition_states(year, transition_length = 3, state_length = 2) +
   ease_aes("sine-in-out")
 
-# ── 7. Render & Save ──────────────────────────────────────────────────────────
+# ── 8. Render & Save ──────────────────────────────────────────────────────────
 
 animate(
   p,
@@ -177,4 +193,4 @@ animate(
   renderer = gifski_renderer()
 )
 
-anim_save(here("gdp_map_v9.gif"))
+anim_save(here("gdp_map.gif"))
